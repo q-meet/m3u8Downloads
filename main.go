@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +21,6 @@ var (
 	chs     = make(chan int, 20)
 	path, _ = filepath.Abs(filepath.Dir(os.Args[0]))
 	host    string
-	// path = "G:\\lwl\\mergets"
 )
 
 func init() {
@@ -64,7 +62,7 @@ func main() {
 				url = host + url
 			} else {
 				log.Println("url不合法")
-				break
+				panic("url不合法")
 			}
 
 		}
@@ -81,37 +79,27 @@ func main() {
 	//-----------------结束下载--------------------------
 
 	//------------合并------------------------
-	finPath := path + "\\final.mp4"
+	finPath := path + "\\final.ts"
 	finobj, _ := os.OpenFile(finPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	finW := bufio.NewWriter(finobj)
 	defer finobj.Close()
 	rd, _ := ioutil.ReadDir(path + "\\temp\\")
-	rep := strings.Split(rd[0].Name(), ".")[0]
-	result, _ := regexp.MatchString("^[0-9]*$", rep)
-	if result == true {
-		fmt.Println("文件名是数字")
-		var keys []int
-		for _, file := range rd {
-			nums := strings.Split(file.Name(), ".")[0]
-			inums, err := strconv.Atoi(nums)
-			if err != nil {
-				fmt.Println(err)
-				break
-			}
-			keys = append(keys, inums)
+
+	var keys []int
+	for _, file := range rd {
+		nums := strings.Split(file.Name(), ".")[0]
+		inums, err := strconv.Atoi(nums)
+		if err != nil {
+			fmt.Println(err)
+			break
 		}
-		sort.Ints(keys)
-		for _, v := range keys {
-			name := strconv.Itoa(v)
-			tempPath := path + "\\temp\\" + name
-			merge(tempPath, finW)
-		}
-	} else {
-		fmt.Println("文件名是字符串")
-		for _, file := range rd {
-			temp := path + "\\temp\\" + file.Name()
-			merge(temp, finW)
-		}
+		keys = append(keys, inums)
+	}
+	sort.Ints(keys)
+	for _, v := range keys {
+		name := strconv.Itoa(v)
+		tempPath := path + "\\temp\\" + name
+		merge(tempPath, finW)
 	}
 	os.RemoveAll(path + "\\temp")
 	fmt.Println("合并完成")
@@ -124,19 +112,6 @@ func merge(fileName string, f *bufio.Writer) {
 	}
 	tempR := bufio.NewReader(tempF)
 	io.Copy(f, tempR)
-	// buf := make([]byte, 1024)
-	// for {
-	// 	n, err := tempR.Read(buf)
-	// 	if err != nil && err != io.EOF {
-	// 		fmt.Println(err)
-	// 	}
-	// 	if n > 0 {
-	// 		f.Write(buf[0:n])
-	// 	}
-	// 	if n == 0 {
-	// 		break
-	// 	}
-	// }
 	tempF.Close()
 	f.Flush()
 	fmt.Println("合并" + fileName)
@@ -147,7 +122,6 @@ func downloads(url string, no int) {
 		<-chs
 		wg.Done()
 	}()
-	// name := strings.Split(url, "/")
 	fileName := path + "\\temp\\" + strconv.Itoa(no)
 	fmt.Println("开始下载：" + fileName)
 	ff, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -170,21 +144,6 @@ func downloads(url string, no int) {
 		log.Printf("第%d个文件拷贝出错 error message:%s", no, err.Error())
 		return
 	}
-	// buff := make([]byte, 1024)
-	// for {
-	// 	n, err := reder.Read(buff)
-	// 	if err != nil && err != io.EOF {
-	// 		fmt.Println(url)
-	// 		fmt.Println(err)
-	// 	}
-
-	// 	if n > 0 {
-	// 		bf.Write(buff[0:n])
-	// 	}
-	// 	if n == 0 {
-	// 		break
-	// 	}
-	// }
 	bf.Flush()
 
 }
