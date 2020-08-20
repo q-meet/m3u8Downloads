@@ -27,6 +27,11 @@ var (
 	ProxyURL   string
 	num        int
 	otherParam string
+	referer    string
+	origin     string
+	userAgent  string
+	m3u8Name   string
+	fileName   string
 )
 
 func init() {
@@ -34,6 +39,11 @@ func init() {
 	flag.StringVar(&ProxyURL, "proxy", "", "代理")
 	flag.IntVar(&num, "num", 20, "并发数")
 	flag.StringVar(&otherParam, "otherParam", "", "url剩余部分")
+	flag.StringVar(&referer, "referer", "", "referer")
+	flag.StringVar(&origin, "origin", "", "origin")
+	flag.StringVar(&userAgent, "userAgent", "", "userAgent")
+	flag.StringVar(&m3u8Name, "m3u8Name", "", "m3u8Name")
+	flag.StringVar(&fileName, "fileName", "final", "fileName")
 }
 
 func main() {
@@ -58,12 +68,13 @@ func main() {
 	} else {
 		httpClient = new(http.Client)
 	}
+
 	_, err := os.Stat(path + "\\temp")
 	if err != nil {
 		os.Mkdir(path+"\\temp", 0644)
 	}
 	//--------------------下载部分-----------
-	m3u8 := "video.m3u8"
+	m3u8 := m3u8Name + ".m3u8"
 	m3u8f, err := os.Open(m3u8)
 	defer m3u8f.Close()
 	if err != nil {
@@ -112,7 +123,7 @@ func main() {
 	//-----------------结束下载--------------------------
 
 	//------------合并------------------------
-	finPath := path + "\\final.ts"
+	finPath := path + "\\" + fileName
 	finobj, _ := os.OpenFile(finPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	finW := bufio.NewWriter(finobj)
 	defer finobj.Close()
@@ -163,7 +174,26 @@ func downloads(httpClient *http.Client, url string, no int) {
 		return
 	}
 	defer ff.Close()
-	rep, err := httpClient.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Println(url)
+		fmt.Println(err)
+	}
+	if origin != "" {
+		req.Header.Add("Origin", origin)
+	}
+	if referer != "" {
+		req.Header.Add("Referer", referer)
+	}
+	if referer != "" {
+		req.Header.Add("Referer", referer)
+	}
+	if userAgent != "" {
+		req.Header.Add("User-Agent", userAgent)
+	}
+	fmt.Printf("url=%s\n", url)
+	rep, err := httpClient.Do(req)
+
 	if err != nil {
 		fmt.Println(url)
 		fmt.Println(err)
