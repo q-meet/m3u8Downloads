@@ -30,8 +30,8 @@ var (
 	referer    string
 	origin     string
 	userAgent  string
-	m3u8Name   string
-	fileName   string
+	httpClient *http.Client
+	debug      string
 )
 
 func init() {
@@ -42,14 +42,9 @@ func init() {
 	flag.StringVar(&referer, "referer", "", "referer")
 	flag.StringVar(&origin, "origin", "", "origin")
 	flag.StringVar(&userAgent, "userAgent", "", "userAgent")
-	flag.StringVar(&m3u8Name, "m3u8Name", "", "m3u8Name")
-	flag.StringVar(&fileName, "fileName", "final", "fileName")
-}
-
-func main() {
+	flag.StringVar(&debug, "debug", "", "debug")
 	flag.Parse()
 	chs = make(chan int, num)
-	var httpClient *http.Client
 	if ProxyURL != "" {
 		proxy, err := url.Parse(ProxyURL)
 		log.Println(ProxyURL)
@@ -68,13 +63,46 @@ func main() {
 	} else {
 		httpClient = new(http.Client)
 	}
+}
 
-	_, err := os.Stat(path + "\\temp")
+func main() {
+
+	fileArr, err := ioutil.ReadDir(path)
 	if err != nil {
-		os.Mkdir(path+"\\temp", 0644)
+		log.Fatalln(err.Error())
 	}
-	//--------------------下载部分-----------
-	m3u8 := m3u8Name + ".m3u8"
+	for _, f := range fileArr {
+		if f.IsDir() {
+			continue
+		}
+		if !strings.Contains(f.Name(), ".m3u8") {
+			continue
+		}
+		wg.Add(1)
+		go work(f.Name())
+	}
+
+	wg.Wait()
+
+	fmt.Println("finishDownload")
+
+}
+
+func work(m3u8 string) {
+	finalName := strings.ReplaceAll(m3u8, ".m3u8", "")
+
+	tempPath := path + "\\" + "temp_" + finalName + "\\"
+	_, err := os.Stat(tempPath)
+	if err != nil {
+		os.Mkdir(tempPath, 0644)
+	}
+	analysis(m3u8, tempPath)
+	combine(tempPath, finalName)
+	wg.Done()
+}
+
+func analysis(m3u8, tempPath string) {
+
 	m3u8f, err := os.Open(m3u8)
 	defer m3u8f.Close()
 	if err != nil {
@@ -112,22 +140,19 @@ func main() {
 		}
 		// fmt.Println(string(line))
 		chs <- 0 //限制线程数
-		wg.Add(1)
-		go downloads(httpClient, url, no)
+
+		go downloads(httpClient, url, tempPath, no)
 		no++
 	}
+}
 
-	wg.Wait()
-
-	fmt.Println("finishDownload")
-	//-----------------结束下载--------------------------
-
+func combine(tempPath, finalName string) {
 	//------------合并------------------------
-	finPath := path + "\\" + fileName
+	finPath := path + "\\" + finalName + ".ts"
 	finobj, _ := os.OpenFile(finPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	finW := bufio.NewWriter(finobj)
 	defer finobj.Close()
-	rd, _ := ioutil.ReadDir(path + "\\temp\\")
+	rd, _ := ioutil.ReadDir(tempPath)
 
 	var keys []int
 	for _, file := range rd {
@@ -142,10 +167,13 @@ func main() {
 	sort.Ints(keys)
 	for _, v := range keys {
 		name := strconv.Itoa(v)
-		tempPath := path + "\\temp\\" + name
-		merge(tempPath, finW)
+		tempName := tempPath + name
+		merge(tempName, finW)
 	}
-	os.RemoveAll(path + "\\temp")
+	if debug == "" {
+		os.RemoveAll(tempPath)
+	}
+
 	fmt.Println("合并完成")
 }
 
@@ -161,12 +189,11 @@ func merge(fileName string, f *bufio.Writer) {
 	fmt.Println("合并" + fileName)
 }
 
-func downloads(httpClient *http.Client, url string, no int) {
+func downloads(httpClient *http.Client, url, tempPath string, no int) {
 	defer func() {
 		<-chs
-		wg.Done()
 	}()
-	fileName := path + "\\temp\\" + strconv.Itoa(no)
+	fileName := tempPath + strconv.Itoa(no)
 	fmt.Println("开始下载：" + fileName)
 	ff, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
