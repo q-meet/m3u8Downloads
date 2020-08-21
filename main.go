@@ -89,6 +89,7 @@ func main() {
 }
 
 func work(m3u8 string) {
+
 	finalName := strings.ReplaceAll(m3u8, ".m3u8", "")
 
 	tempPath := path + "\\" + "temp_" + finalName + "\\"
@@ -98,11 +99,12 @@ func work(m3u8 string) {
 	}
 	analysis(m3u8, tempPath)
 	combine(tempPath, finalName)
+
 	wg.Done()
 }
 
 func analysis(m3u8, tempPath string) {
-
+	downloadsWg := new(sync.WaitGroup)
 	m3u8f, err := os.Open(m3u8)
 	defer m3u8f.Close()
 	if err != nil {
@@ -140,10 +142,11 @@ func analysis(m3u8, tempPath string) {
 		}
 		// fmt.Println(string(line))
 		chs <- 0 //限制线程数
-
-		go downloads(httpClient, url, tempPath, no)
+		downloadsWg.Add(1)
+		go downloads(httpClient, url, tempPath, no, downloadsWg)
 		no++
 	}
+	downloadsWg.Wait()
 }
 
 func combine(tempPath, finalName string) {
@@ -171,9 +174,11 @@ func combine(tempPath, finalName string) {
 		merge(tempName, finW)
 	}
 	if debug == "" {
-		os.RemoveAll(tempPath)
+		err := os.RemoveAll(tempPath)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
 	}
-
 	fmt.Println("合并完成")
 }
 
@@ -182,16 +187,18 @@ func merge(fileName string, f *bufio.Writer) {
 	if err != nil {
 		fmt.Println(err)
 	}
+	defer tempF.Close()
 	tempR := bufio.NewReader(tempF)
 	io.Copy(f, tempR)
-	tempF.Close()
+
 	f.Flush()
 	fmt.Println("合并" + fileName)
 }
 
-func downloads(httpClient *http.Client, url, tempPath string, no int) {
+func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsWg *sync.WaitGroup) {
 	defer func() {
 		<-chs
+		downloadsWg.Done()
 	}()
 	fileName := tempPath + strconv.Itoa(no)
 	fmt.Println("开始下载：" + fileName)
