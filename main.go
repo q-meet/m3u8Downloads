@@ -19,10 +19,11 @@ import (
 )
 
 var (
-	wg      sync.WaitGroup
-	path, _ = filepath.Abs(filepath.Dir(os.Args[0]))
-	host    string
-	chs     chan int
+	wg        sync.WaitGroup
+	path, _   = filepath.Abs(filepath.Dir(os.Args[0]))
+	host      string
+	chs       chan int
+	chsWorker chan int
 	//ProxyURL 代理地址
 	ProxyURL   string
 	num        int
@@ -45,6 +46,7 @@ func init() {
 	flag.StringVar(&debug, "debug", "", "debug")
 	flag.Parse()
 	chs = make(chan int, num)
+	chsWorker = make(chan int, num)
 	if ProxyURL != "" {
 		proxy, err := url.Parse(ProxyURL)
 		log.Println(ProxyURL)
@@ -65,51 +67,88 @@ func init() {
 	}
 }
 
-func main() {
+type pathStruct struct {
+	F    os.FileInfo
+	Path string
+}
 
+func main() {
 	fileArr, err := ioutil.ReadDir(path)
 	if err != nil {
 		log.Fatalln(err.Error())
 	}
+	var pathS []pathStruct
 	for _, f := range fileArr {
-		if f.IsDir() {
-			continue
+		p := pathStruct{
+			F:    f,
+			Path: path,
 		}
-		if !strings.Contains(f.Name(), ".m3u8") {
-			continue
+		pathS = append(pathS, p)
+	}
+
+	for len(pathS) > 0 {
+		ps := pathS[0]
+		pathS = pathS[1:]
+		if ps.F.IsDir() {
+			_pathInfoArr, err := ioutil.ReadDir(ps.Path + "\\" + ps.F.Name())
+			if err != nil {
+				stdErr(err.Error())
+				continue
+			}
+			for _, _f := range _pathInfoArr {
+				_p := pathStruct{
+					F:    _f,
+					Path: ps.Path + "\\" + ps.F.Name() + "\\",
+				}
+				pathS = append(pathS, _p)
+			}
+		} else {
+			check(ps)
 		}
-		wg.Add(1)
-		go work(f.Name())
 	}
 
 	wg.Wait()
 
-	fmt.Println("finishDownload")
+	fmt.Println("Done")
 
 }
 
-func work(m3u8 string) {
+func check(ps pathStruct) {
 
+	if !strings.Contains(ps.F.Name(), ".m3u8") {
+		return
+	}
+	wg.Add(1)
+	chsWorker <- 0
+	go work(ps.F.Name(), ps.Path)
+}
+
+func work(m3u8, basePath string) {
+	defer func() {
+		<-chsWorker
+		wg.Done()
+	}()
 	finalName := strings.ReplaceAll(m3u8, ".m3u8", "")
 
-	tempPath := path + "\\" + "temp_" + finalName + "\\"
+	tempPath := basePath + "\\" + "temp_" + finalName + "\\"
 	_, err := os.Stat(tempPath)
 	if err != nil {
 		os.Mkdir(tempPath, 0644)
 	}
-	analysis(m3u8, tempPath)
-	combine(tempPath, finalName)
-
-	wg.Done()
+	analysis(basePath+m3u8, tempPath)
+	combine(basePath, tempPath, finalName)
 }
 
 func analysis(m3u8, tempPath string) {
 	downloadsWg := new(sync.WaitGroup)
 	m3u8f, err := os.Open(m3u8)
-	defer m3u8f.Close()
 	if err != nil {
-		fmt.Println(err)
+		stdErr(err.Error())
+		remove(tempPath)
+		return
 	}
+	defer remove(m3u8)
+	defer m3u8f.Close()
 	m3u8reder := bufio.NewReader(m3u8f)
 	no := 1
 	for {
@@ -118,18 +157,18 @@ func analysis(m3u8, tempPath string) {
 			break
 		}
 		if err != nil {
-			fmt.Println(err)
-			break
+			stdErr(err.Error())
+			remove(tempPath)
+			return
 		}
 
 		url := string(line)
 		if strings.Contains(url, "#") {
-			log.Println(url + "非url 执行跳过")
+			// log.Println(url + "非url 执行跳过")
 			continue
 		}
 		if !strings.Contains(url, "http") {
 			if host != "" {
-
 				url = host + url
 				if otherParam != "" {
 					url += otherParam
@@ -147,23 +186,54 @@ func analysis(m3u8, tempPath string) {
 		no++
 	}
 	downloadsWg.Wait()
+	allTemp, err := ioutil.ReadDir(tempPath)
+	if err != nil {
+		stdErr(err.Error())
+		defer func() {
+			remove(tempPath)
+		}()
+		return
+	}
+	if len(allTemp) != (no - 1) {
+		stdErr("文件数量不正确")
+		defer func() {
+			remove(tempPath)
+		}()
+		return
+	}
+	return
 }
 
-func combine(tempPath, finalName string) {
-	//------------合并------------------------
-	finPath := path + "\\" + finalName + ".ts"
-	finobj, _ := os.OpenFile(finPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
-	finW := bufio.NewWriter(finobj)
-	defer finobj.Close()
-	rd, _ := ioutil.ReadDir(tempPath)
+func combine(basePath, tempPath, finalName string) {
 
+	rd, err := ioutil.ReadDir(tempPath)
+	if err != nil {
+		remove(tempPath)
+		stdErr(err.Error())
+		return
+	}
+
+	//------------合并------------------------
+	finPath := basePath + "\\" + finalName + ".ts"
+	fmt.Println("合并" + finPath)
+	finobj, err := os.OpenFile(finPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		stdErr(err.Error())
+		remove(finPath)
+	}
+	defer finobj.Close()
+	finW := bufio.NewWriter(finobj)
 	var keys []int
 	for _, file := range rd {
 		nums := strings.Split(file.Name(), ".")[0]
 		inums, err := strconv.Atoi(nums)
 		if err != nil {
-			fmt.Println(err)
-			break
+			stdErr(err.Error())
+			defer func() {
+				finobj.Close()
+				remove(finPath)
+			}()
+			return
 		}
 		keys = append(keys, inums)
 	}
@@ -171,28 +241,55 @@ func combine(tempPath, finalName string) {
 	for _, v := range keys {
 		name := strconv.Itoa(v)
 		tempName := tempPath + name
-		merge(tempName, finW)
+		err = merge(tempName, finW)
+		if err != nil {
+			defer func() {
+				finobj.Close()
+				remove(finPath)
+			}()
+			stdErr(err.Error())
+			return
+		}
 	}
 	if debug == "" {
 		err := os.RemoveAll(tempPath)
 		if err != nil {
-			fmt.Println(err.Error())
+			defer func() {
+				finobj.Close()
+				remove(finPath)
+			}()
+			stdErr(err.Error())
 		}
 	}
-	fmt.Println("合并完成")
+
+	// fmt.Println("合并完成")
 }
 
-func merge(fileName string, f *bufio.Writer) {
+func remove(path string) {
+	err := os.RemoveAll(path)
+	if err != nil {
+		stdErr(err.Error() + "\n")
+	}
+}
+
+func merge(fileName string, f *bufio.Writer) error {
 	tempF, err := os.Open(fileName)
 	if err != nil {
-		fmt.Println(err)
+		return err
 	}
 	defer tempF.Close()
 	tempR := bufio.NewReader(tempF)
-	io.Copy(f, tempR)
-
+	_, err = io.Copy(f, tempR)
+	if err != nil {
+		return err
+	}
 	f.Flush()
-	fmt.Println("合并" + fileName)
+	return nil
+	// fmt.Println("合并" + fileName)
+}
+
+func stdErr(msg string) {
+	fmt.Fprintf(os.Stderr, msg)
 }
 
 func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsWg *sync.WaitGroup) {
@@ -204,14 +301,22 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 	fmt.Println("开始下载：" + fileName)
 	ff, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
-		fmt.Println(err)
+		defer func() {
+			remove(fileName)
+		}()
+		stdErr(err.Error())
 		return
 	}
 	defer ff.Close()
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Println(url)
-		fmt.Println(err)
+		defer func() {
+			ff.Close()
+			remove(fileName)
+		}()
+		stdErr(err.Error())
+		return
 	}
 	if origin != "" {
 		req.Header.Add("Origin", origin)
@@ -225,12 +330,16 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 	if userAgent != "" {
 		req.Header.Add("User-Agent", userAgent)
 	}
-	fmt.Printf("url=%s\n", url)
+	// fmt.Printf("url=%s\n", url)
 	rep, err := httpClient.Do(req)
 
 	if err != nil {
-		fmt.Println(url)
-		fmt.Println(err)
+		defer func() {
+			ff.Close()
+			remove(fileName)
+		}()
+		stdErr(err.Error())
+		return
 	}
 	defer rep.Body.Close()
 	reader := bufio.NewReader(rep.Body)
@@ -238,7 +347,11 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 	bf := bufio.NewWriter(ff)
 	_, err = io.Copy(bf, reader)
 	if err != nil {
-		log.Printf("第%d个文件拷贝出错 error message:%s", no, err.Error())
+		defer func() {
+			ff.Close()
+			remove(fileName)
+		}()
+		stdErr(err.Error())
 		return
 	}
 	bf.Flush()
