@@ -2,6 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,10 +78,13 @@ type pathStruct struct {
 }
 
 func main() {
+	// 默认当前目录下文件搜索m3u8文件  修改为video文件夹
+	path += "\\video"
 	fileArr, err := ioutil.ReadDir(path)
 	if err != nil {
 		log.Fatalln(err.Error())
 	}
+
 	var pathS []pathStruct
 	for _, f := range fileArr {
 		p := pathStruct{
@@ -114,7 +122,6 @@ func main() {
 }
 
 func check(ps pathStruct) {
-
 	if !strings.Contains(ps.F.Name(), ".m3u8") {
 		return
 	}
@@ -131,11 +138,13 @@ func work(m3u8, basePath string) {
 	finalName := strings.ReplaceAll(m3u8, ".m3u8", "")
 
 	tempPath := basePath + "\\" + "temp_" + finalName + "\\"
+
 	_, err := os.Stat(tempPath)
 	if err != nil {
 		os.Mkdir(tempPath, 0644)
 	}
-	analysis(basePath+m3u8, tempPath)
+
+	analysis(basePath+"/"+m3u8, tempPath)
 	combine(basePath, tempPath, finalName)
 }
 
@@ -151,6 +160,7 @@ func analysis(m3u8, tempPath string) {
 	defer m3u8f.Close()
 	m3u8reder := bufio.NewReader(m3u8f)
 	no := 1
+	key := ""
 	for {
 		line, _, err := m3u8reder.ReadLine()
 		if err == io.EOF {
@@ -163,8 +173,29 @@ func analysis(m3u8, tempPath string) {
 		}
 
 		url := string(line)
+		if strings.HasPrefix(url, "#EXT-X-KEY"){
+			keyInfo := parseLineParameters(url)
+			fmt.Println(keyInfo)
+			if keyUrl, ok := keyInfo["URI"];ok && keyUrl != ""{
+				if !strings.Contains(keyUrl, "http") {
+					keyUrl = host + keyUrl
+				}
+				fmt.Println(keyUrl)
+				keyBody, err := Get(keyUrl)
+				if err != nil {
+					log.Println("get key error", err)
+					continue
+				}
+				keyBodyStr , err := ioutil.ReadAll(keyBody)
+				if err != nil {
+					log.Println("get key error", err)
+					continue
+				}
+				key = string(keyBodyStr)
+			}
+		}
 		if strings.Contains(url, "#") {
-			// log.Println(url + "非url 执行跳过")
+			log.Println(url + "非url 执行跳过")
 			continue
 		}
 		if !strings.Contains(url, "http") {
@@ -177,12 +208,11 @@ func analysis(m3u8, tempPath string) {
 				log.Println("url不合法")
 				panic("url不合法")
 			}
-
 		}
-		// fmt.Println(string(line))
+		fmt.Println(string(line))
 		chs <- 0 //限制线程数
 		downloadsWg.Add(1)
-		go downloads(httpClient, url, tempPath, no, downloadsWg)
+		go downloads(httpClient, url, tempPath, no, downloadsWg, key)
 		no++
 	}
 	downloadsWg.Wait()
@@ -262,7 +292,7 @@ func combine(basePath, tempPath, finalName string) {
 		}
 	}
 
-	// fmt.Println("合并完成")
+	fmt.Println("合并完成")
 }
 
 func remove(path string) {
@@ -284,15 +314,15 @@ func merge(fileName string, f *bufio.Writer) error {
 		return err
 	}
 	f.Flush()
+	fmt.Println("合并" + fileName)
 	return nil
-	// fmt.Println("合并" + fileName)
 }
 
 func stdErr(msg string) {
 	fmt.Fprintf(os.Stderr, msg)
 }
 
-func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsWg *sync.WaitGroup) {
+func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsWg *sync.WaitGroup, key string) {
 	defer func() {
 		<-chs
 		downloadsWg.Done()
@@ -345,6 +375,21 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 	reader := bufio.NewReader(rep.Body)
 
 	bf := bufio.NewWriter(ff)
+
+	all, _ := ioutil.ReadAll(reader)
+	if key != "" {
+		all, err = AES128Decrypt(all, []byte(key), []byte(""))
+		if err != nil {
+			defer func() {
+				ff.Close()
+				remove(fileName)
+			}()
+			stdErr(err.Error())
+			return
+		}
+	}
+	bf.Write(all)
+/*
 	_, err = io.Copy(bf, reader)
 	if err != nil {
 		defer func() {
@@ -353,7 +398,83 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 		}()
 		stdErr(err.Error())
 		return
-	}
+	}*/
 	bf.Flush()
 
+}
+
+func AES128Encrypt(origData, key, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	blockSize := block.BlockSize()
+	if len(iv) == 0 {
+		iv = key
+	}
+	origData = pkcs5Padding(origData, blockSize)
+	blockMode := cipher.NewCBCEncrypter(block, iv[:blockSize])
+	crypted := make([]byte, len(origData))
+	blockMode.CryptBlocks(crypted, origData)
+	return crypted, nil
+}
+
+func AES128Decrypt(crypted, key, iv []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	blockSize := block.BlockSize()
+	if len(iv) == 0 {
+		iv = key
+	}
+	blockMode := cipher.NewCBCDecrypter(block, iv[:blockSize])
+	origData := make([]byte, len(crypted))
+	blockMode.CryptBlocks(origData, crypted)
+	origData = pkcs5UnPadding(origData)
+	return origData, nil
+}
+
+func pkcs5Padding(cipherText []byte, blockSize int) []byte {
+	padding := blockSize - len(cipherText)%blockSize
+	padText := bytes.Repeat([]byte{byte(padding)}, padding)
+	return append(cipherText, padText...)
+}
+
+func pkcs5UnPadding(origData []byte) []byte {
+	length := len(origData)
+	unPadding := int(origData[length-1])
+	return origData[:(length - unPadding)]
+}
+
+
+// regex pattern for extracting `key=value` parameters from a line
+var linePattern = regexp.MustCompile(`([a-zA-Z-]+)=("[^"]+"|[^",]+)`)
+
+// parseLineParameters extra parameters in string `line`
+func parseLineParameters(line string) map[string]string {
+	r := linePattern.FindAllStringSubmatch(line, -1)
+	params := make(map[string]string)
+	for _, arr := range r {
+		params[arr[1]] = strings.Trim(arr[2], "\"")
+	}
+	return params
+}
+func Get(url string) (io.ReadCloser, error) {
+	c := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+		Timeout: time.Duration(60) * time.Second,
+	}
+	resp, err := c.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("http error: status code %d", resp.StatusCode)
+	}
+	return resp.Body, nil
 }
