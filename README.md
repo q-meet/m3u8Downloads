@@ -1,4 +1,4 @@
-# M3U8 视频下载 v1.0.0
+# M3U8 视频下载 V2
 
 ### 启动步骤
 
@@ -6,27 +6,36 @@
 
 如果m3u8内容里面为绝对路径则不用设置host参数
 
+参数指定下载方式 输出在video目录下
+
+```shell
+go run main.go -u="http://example.com/xxxx/index.m3u8"
+```
+
+
 ### 执行
 
-```go build ```
+```shell
+go build
+ ```
 
 http://example.com = m3u8指向域名
 
 Linux
 
-```
-./m3u8Downloader -host="http://example.com"
+```shell
+./m3u8Downloader"
 ```
 
 Windows PowerShell
 
-```
-.\m3u8Downloader.exe -host="http://example.com" 
+```shell
+.\m3u8Downloader.exe" 
 ```
 
 MacOS
 
-```
-./m3u8Downloader -host=http://example.com
+```shell
+./m3u8Downloader
 ```
 
