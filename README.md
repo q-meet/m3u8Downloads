@@ -1,4 +1,4 @@
-# M3U8 视频下载 V2
+# M3U8 视频下载
 
 ### 启动步骤
 
@@ -19,18 +19,16 @@ go run main.go -u="http://example.com/xxxx/index.m3u8"
 go build
  ```
 
-http://example.com = m3u8指向域名
-
 Linux
 
 ```shell
-./m3u8Downloader"
+./m3u8Downloader
 ```
 
 Windows PowerShell
 
 ```shell
-.\m3u8Downloader.exe" 
+.\m3u8Downloader.exe
 ```
 
 MacOS
@@ -39,3 +37,10 @@ MacOS
 ./m3u8Downloader
 ```
 
+
+
+### 参数说明
+
+```shell
+./m3u8Downloader -h
+ ```

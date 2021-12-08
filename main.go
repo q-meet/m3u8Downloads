@@ -86,7 +86,6 @@ func main() {
 	wg.Wait()
 
 	fmt.Println("Done")
-
 }
 
 func start() {
@@ -231,7 +230,7 @@ func analysis(m3u8f io.Reader, tempPath string) {
 				}
 			}
 
-			urlLineInfo,_ := url.Parse(urlLine)
+			urlLineInfo, _ := url.Parse(urlLine)
 
 			host = urlLineInfo.Scheme + "://" + urlLineInfo.Hostname()
 
