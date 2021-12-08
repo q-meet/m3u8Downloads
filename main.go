@@ -27,6 +27,7 @@ var (
 	wg        sync.WaitGroup
 	path, _   = filepath.Abs(filepath.Dir(os.Args[0]))
 	host      string
+	u         string
 	chs       chan int
 	chsWorker chan int
 	//ProxyURL 代理地址
@@ -41,6 +42,7 @@ var (
 )
 
 func init() {
+	flag.StringVar(&u, "u", "", "m3u8链接")
 	flag.StringVar(&host, "host", "", "主机名 带http/https")
 	flag.StringVar(&ProxyURL, "proxy", "", "代理")
 	flag.IntVar(&num, "num", 20, "并发数")
@@ -78,6 +80,75 @@ type pathStruct struct {
 }
 
 func main() {
+
+	start()
+
+	wg.Wait()
+
+	fmt.Println("Done")
+
+}
+
+// #EXT-X-KEY:METHOD=AES-128,URI="key.key"
+type Key struct {
+	// 'AES-128' or 'NONE'
+	// If the encryption method is NONE, the URI and the IV attributes MUST NOT be present
+	Method string
+	URI    string
+	IV     string
+}
+
+type M3u8 struct {
+	Segments []*Segment
+	Keys     map[int]*Key
+}
+
+type Segment struct {
+	URI      string
+	KeyIndex int
+	Title    string  // #EXTINF: duration,<title>
+	Duration float32 // #EXTINF: duration,<title>
+	Length   uint64  // #EXT-X-BYTERANGE: length[@offset]
+	Offset   uint64  // #EXT-X-BYTERANGE: length[@offset]
+}
+
+func start() {
+	// 根据参数设置启动方式
+	// 如果存在链接参数则使用单下载方式
+	// 如果没参数则使用文件夹下m3u8下载方式
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("[error]:", r)
+			os.Exit(-1)
+		}
+	}()
+	if u != "" {
+		uInfo, err := url.Parse(u)
+		if err != nil {
+			panic(err)
+		}
+
+		body, _ := Get(u)
+
+		basePath := "video\\"
+		finalName := "temp_" + strings.ReplaceAll(uInfo.Path, "/", "")
+		tempPath := basePath + finalName + "\\"
+
+		_, err = os.Stat(tempPath)
+		if err != nil {
+			_ = os.Mkdir(tempPath, 0644)
+		}
+
+		analysis(body, tempPath)
+		combine(basePath, tempPath, finalName)
+		return
+	}
+	fileDownloads()
+
+}
+
+func fileDownloads() {
+
 	// 默认当前目录下文件搜索m3u8文件  修改为video文件夹
 	path += "\\video"
 	fileArr, err := ioutil.ReadDir(path)
@@ -114,15 +185,10 @@ func main() {
 			check(ps)
 		}
 	}
-
-	wg.Wait()
-
-	fmt.Println("Done")
-
 }
 
 func check(ps pathStruct) {
-	if !strings.Contains(ps.F.Name(), ".m3u8") {
+	if !strings.HasSuffix(ps.F.Name(), ".m3u8") {
 		return
 	}
 	wg.Add(1)
@@ -144,20 +210,22 @@ func work(m3u8, basePath string) {
 		os.Mkdir(tempPath, 0644)
 	}
 
-	analysis(basePath+"/"+m3u8, tempPath)
-	combine(basePath, tempPath, finalName)
-}
-
-func analysis(m3u8, tempPath string) {
-	downloadsWg := new(sync.WaitGroup)
-	m3u8f, err := os.Open(m3u8)
+	m3u8f, err := os.Open(basePath + "\\" + m3u8)
 	if err != nil {
 		stdErr(err.Error())
 		remove(tempPath)
 		return
 	}
 	defer remove(m3u8)
+
 	defer m3u8f.Close()
+
+	analysis(m3u8f, tempPath)
+	combine(basePath, tempPath, finalName)
+}
+
+func analysis(m3u8f io.Reader, tempPath string) {
+	downloadsWg := new(sync.WaitGroup)
 	m3u8reder := bufio.NewReader(m3u8f)
 	no := 1
 	key := ""
@@ -172,49 +240,81 @@ func analysis(m3u8, tempPath string) {
 			return
 		}
 
-		url := string(line)
-		if strings.HasPrefix(url, "#EXT-X-KEY"){
-			keyInfo := parseLineParameters(url)
-			fmt.Println(keyInfo)
-			if keyUrl, ok := keyInfo["URI"];ok && keyUrl != ""{
-				if !strings.Contains(keyUrl, "http") {
-					keyUrl = host + keyUrl
+		urlLine := string(line)
+
+		if strings.HasPrefix(urlLine, "#EXT-X-STREAM-INF:") {
+			line, _, err = m3u8reder.ReadLine()
+			urlLine = string(line)
+			if !strings.Contains(urlLine, "http") {
+				if u == "" {
+					urlLine = host + urlLine
+				} else {
+					urls, _ := url.Parse(u)
+					urlLine = urls.Scheme + "://" + urls.Hostname() + urlLine
 				}
-				fmt.Println(keyUrl)
+			}
+
+			urlLineInfo,_ := url.Parse(urlLine)
+
+			host = urlLineInfo.Scheme + "://" + urlLineInfo.Hostname()
+
+			body, _ := Get(urlLine)
+			analysis(body, tempPath)
+			return
+		}
+
+		if strings.HasPrefix(urlLine, "#EXT-X-KEY") {
+			keyInfo := parseLineParameters(urlLine)
+			if keyUrl, ok := keyInfo["URI"]; ok && keyUrl != "" {
+				if !strings.HasPrefix(keyUrl, "http") {
+					if u == "" {
+						keyUrl = host + keyUrl
+					} else {
+						urls, _ := url.Parse(u)
+						keyUrl = urls.Scheme + "://" + urls.Hostname() + keyUrl
+					}
+				}
 				keyBody, err := Get(keyUrl)
 				if err != nil {
 					log.Println("get key error", err)
 					continue
 				}
-				keyBodyStr , err := ioutil.ReadAll(keyBody)
+				keyBodyStr, err := ioutil.ReadAll(keyBody)
 				if err != nil {
-					log.Println("get key error", err)
+					log.Println("readAll key error", err)
 					continue
 				}
 				key = string(keyBodyStr)
+			} else {
+				key = ""
 			}
-		}
-		if strings.Contains(url, "#") {
-			log.Println(url + "非url 执行跳过")
 			continue
 		}
-		if !strings.Contains(url, "http") {
-			if host != "" {
-				url = host + url
+		if strings.Contains(urlLine, "#") {
+			//log.Println(urlLine + "非url 执行跳过")
+			continue
+		}
+		if !strings.HasPrefix(urlLine, "http") {
+			if u != "" {
+				urls, _ := url.Parse(u)
+				urlLine = urls.Scheme + "://" + urls.Hostname() + urlLine
+			} else if host != "" {
+				urlLine = host + urlLine
 				if otherParam != "" {
-					url += otherParam
+					urlLine += otherParam
 				}
 			} else {
-				log.Println("url不合法")
+				log.Println(urlLine, "url不合法")
 				panic("url不合法")
 			}
 		}
-		fmt.Println(string(line))
+
 		chs <- 0 //限制线程数
 		downloadsWg.Add(1)
-		go downloads(httpClient, url, tempPath, no, downloadsWg, key)
+		go downloads(httpClient, urlLine, tempPath, no, downloadsWg, key)
 		no++
 	}
+
 	downloadsWg.Wait()
 	allTemp, err := ioutil.ReadDir(tempPath)
 	if err != nil {
@@ -235,7 +335,6 @@ func analysis(m3u8, tempPath string) {
 }
 
 func combine(basePath, tempPath, finalName string) {
-
 	rd, err := ioutil.ReadDir(tempPath)
 	if err != nil {
 		remove(tempPath)
@@ -269,7 +368,7 @@ func combine(basePath, tempPath, finalName string) {
 	}
 	sort.Ints(keys)
 	for _, v := range keys {
-		name := strconv.Itoa(v)
+		name := strconv.Itoa(v) + ".ts"
 		tempName := tempPath + name
 		err = merge(tempName, finW)
 		if err != nil {
@@ -324,11 +423,18 @@ func stdErr(msg string) {
 
 func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsWg *sync.WaitGroup, key string) {
 	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("[error]", r)
+			os.Exit(-1)
+		}
+	}()
+	defer func() {
 		<-chs
 		downloadsWg.Done()
 	}()
-	fileName := tempPath + strconv.Itoa(no)
-	fmt.Println("开始下载：" + fileName)
+	fileName := tempPath + strconv.Itoa(no) + ".ts"
+	fmt.Println("key：", key)
+	fmt.Println("开始下载："+fileName, key, url)
 	ff, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		defer func() {
@@ -374,11 +480,9 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 	defer rep.Body.Close()
 	reader := bufio.NewReader(rep.Body)
 
-	bf := bufio.NewWriter(ff)
-
 	all, _ := ioutil.ReadAll(reader)
 	if key != "" {
-		all, err = AES128Decrypt(all, []byte(key), []byte(""))
+		all, err = AES128Decrypt(all, []byte(key), []byte(key))
 		if err != nil {
 			defer func() {
 				ff.Close()
@@ -388,9 +492,12 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 			return
 		}
 	}
-	bf.Write(all)
-/*
-	_, err = io.Copy(bf, reader)
+
+	bf := bufio.NewWriter(ff)
+	_, err = bf.Write(all)
+
+	//bf := bufio.NewWriter(ff)
+	//_, err = io.Copy(bf, reader)
 	if err != nil {
 		defer func() {
 			ff.Close()
@@ -398,7 +505,7 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 		}()
 		stdErr(err.Error())
 		return
-	}*/
+	}
 	bf.Flush()
 
 }
@@ -446,7 +553,6 @@ func pkcs5UnPadding(origData []byte) []byte {
 	unPadding := int(origData[length-1])
 	return origData[:(length - unPadding)]
 }
-
 
 // regex pattern for extracting `key=value` parameters from a line
 var linePattern = regexp.MustCompile(`([a-zA-Z-]+)=("[^"]+"|[^",]+)`)
