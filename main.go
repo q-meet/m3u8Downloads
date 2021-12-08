@@ -89,29 +89,6 @@ func main() {
 
 }
 
-// #EXT-X-KEY:METHOD=AES-128,URI="key.key"
-type Key struct {
-	// 'AES-128' or 'NONE'
-	// If the encryption method is NONE, the URI and the IV attributes MUST NOT be present
-	Method string
-	URI    string
-	IV     string
-}
-
-type M3u8 struct {
-	Segments []*Segment
-	Keys     map[int]*Key
-}
-
-type Segment struct {
-	URI      string
-	KeyIndex int
-	Title    string  // #EXTINF: duration,<title>
-	Duration float32 // #EXTINF: duration,<title>
-	Length   uint64  // #EXT-X-BYTERANGE: length[@offset]
-	Offset   uint64  // #EXT-X-BYTERANGE: length[@offset]
-}
-
 func start() {
 	// 根据参数设置启动方式
 	// 如果存在链接参数则使用单下载方式
@@ -207,7 +184,7 @@ func work(m3u8, basePath string) {
 
 	_, err := os.Stat(tempPath)
 	if err != nil {
-		os.Mkdir(tempPath, 0644)
+		_ = os.Mkdir(tempPath, 0644)
 	}
 
 	m3u8f, err := os.Open(basePath + "\\" + m3u8)
@@ -349,6 +326,7 @@ func combine(basePath, tempPath, finalName string) {
 	if err != nil {
 		stdErr(err.Error())
 		remove(finPath)
+		return
 	}
 	defer finobj.Close()
 	finW := bufio.NewWriter(finobj)
@@ -412,13 +390,13 @@ func merge(fileName string, f *bufio.Writer) error {
 	if err != nil {
 		return err
 	}
-	f.Flush()
+	_ = f.Flush()
 	fmt.Println("合并" + fileName)
 	return nil
 }
 
 func stdErr(msg string) {
-	fmt.Fprintf(os.Stderr, msg)
+	_, _ = fmt.Fprintf(os.Stderr, msg)
 }
 
 func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsWg *sync.WaitGroup, key string) {
@@ -506,7 +484,7 @@ func downloads(httpClient *http.Client, url, tempPath string, no int, downloadsW
 		stdErr(err.Error())
 		return
 	}
-	bf.Flush()
+	_ = bf.Flush()
 
 }
 
