@@ -99,28 +99,32 @@ func start() {
 		}
 	}()
 	if u != "" {
-		uInfo, err := url.Parse(u)
-		if err != nil {
-			panic(err)
-		}
-
-		body, _ := Get(u)
-
-		basePath := "video\\"
-		finalName := "temp_" + strings.ReplaceAll(uInfo.Path, "/", "")
-		tempPath := basePath + finalName + "\\"
-
-		_, err = os.Stat(tempPath)
-		if err != nil {
-			_ = os.Mkdir(tempPath, 0644)
-		}
-
-		analysis(body, tempPath)
-		combine(basePath, tempPath, finalName)
+		uDownload()
 		return
 	}
 	fileDownloads()
 
+}
+
+func uDownload() {
+	uInfo, err := url.Parse(u)
+	if err != nil {
+		panic(err)
+	}
+
+	body, _ := Get(u)
+
+	basePath := "video\\"
+	finalName := "temp_" + strings.ReplaceAll(uInfo.Path, "/", "")
+	tempPath := basePath + finalName + "\\"
+
+	_, err = os.Stat(tempPath)
+	if err != nil {
+		_ = os.Mkdir(tempPath, 0644)
+	}
+
+	analysis(body, tempPath)
+	combine(basePath, tempPath, finalName)
 }
 
 func fileDownloads() {
